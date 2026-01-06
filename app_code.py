@@ -5,10 +5,29 @@ import numpy as np
 from PIL import Image
 from streamlit_drawable_canvas import st_canvas
 
-# 1. 頁面設定
+# 1. 頁面設定與行動端優化
 st.set_page_config(page_title="AI手寫辨識APP", layout="wide")
 
-# --- 修改標題與三點提示 ---
+# --- [新增] CSS 注入：解決手機 APP 下拉刷新問題 ---
+st.markdown(
+    """
+    <style>
+    /* 1. 禁止手機瀏覽器（WebView）在頂部下拉時重新整理 */
+    html, body, [data-testid="stAppViewContainer"] {
+        overscroll-behavior-y: contain;
+        overflow: hidden;
+    }
+    
+    /* 2. 讓畫板區域專注於觸控書寫，不觸發頁面捲動 */
+    canvas {
+        touch-action: none !important;
+    }
+    </style>
+    """,
+    unsafe_allow_html=True
+)
+
+# --- 標題與三點提示 ---
 st.title("🔢 AI手寫辨識APP")
 st.markdown("""
 ##### 💡 **使用說明：**
@@ -18,16 +37,17 @@ st.markdown("""
 """)
 st.divider()
 
-# 2. 載入模型
+# 2. 載入模型 (確保 mnist_model.h5 檔案在同一目錄下)
 @st.cache_resource
 def load_my_model():
+    # 這裡可以根據需要改為 load_model('mnist_model.h5')
     return tf.keras.models.load_model('mnist_model.h5')
 
 try:
     model = load_my_model()
     st.sidebar.success("✅ AI 模型已就緒")
 except Exception as e:
-    st.sidebar.error("❌ 模型載入失敗")
+    st.sidebar.error("❌ 模型載入失敗，請確認檔案是否存在")
 
 # 3. 側邊欄：功能設定與參數微調
 st.sidebar.header("🛠️ 系統功能設定")
@@ -39,11 +59,13 @@ min_area = st.sidebar.slider("1. 雜訊過濾強度", 100, 1500, 300, help="數�
 sensitivity = st.sidebar.slider("2. 捕捉靈敏度", 1, 25, 12, help="筆跡太淡請調低，雜訊太強請調高。")
 thickness = st.sidebar.slider("3. 字體加粗程度", 1, 5, 2, help="針對細筆跡補強。")
 
-# 4. 影像處理核心函數 (保持邏輯不變)
+# 4. 影像處理核心函數
 def process_and_predict(img_gray, is_canvas=False):
     if is_canvas:
+        # 畫板模式直接二值化
         _, thresh = cv2.threshold(img_gray, 1, 255, cv2.THRESH_BINARY)
     else:
+        # 相機模式需強化對比與降噪
         enhanced = cv2.convertScaleAbs(img_gray, alpha=1.5, beta=0)
         blurred = cv2.GaussianBlur(enhanced, (5, 5), 0)
         thresh = cv2.adaptiveThreshold(blurred, 255, cv2.ADAPTIVE_THRESH_GAUSSIAN_C, 
@@ -51,6 +73,7 @@ def process_and_predict(img_gray, is_canvas=False):
         kernel = np.ones((3,3), np.uint8)
         thresh = cv2.dilate(thresh, kernel, iterations=thickness)
 
+    # 尋找輪廓
     contours, _ = cv2.findContours(thresh, cv2.RETR_EXTERNAL, cv2.CHAIN_APPROX_SIMPLE)
     valid_contours = sorted([c for c in contours if cv2.contourArea(c) > min_area], 
                             key=lambda c: cv2.boundingRect(c)[0])
@@ -69,6 +92,7 @@ def process_and_predict(img_gray, is_canvas=False):
         digit_canvas[pad:pad+h, pad:pad+w] = roi
         final_img = cv2.resize(digit_canvas, (28, 28), interpolation=cv2.INTER_AREA)
         
+        # 模型推論
         input_data = final_img.astype('float32') / 255.0
         input_data = np.expand_dims(input_data, axis=(0, -1))
         prediction = model.predict(input_data, verbose=0)
@@ -82,7 +106,7 @@ if option == "手寫畫板模式":
     st.write("### ✍️ 請在黑色畫板內寫入數字：")
     canvas_result = st_canvas(
         fill_color="rgba(255, 255, 255, 0.3)",
-        stroke_width=15,
+        stroke_width=20, # 稍微調粗增加手機辨識度
         stroke_color="#FFFFFF",
         background_color="#000000",
         width=700,
