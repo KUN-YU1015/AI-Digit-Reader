@@ -14,7 +14,7 @@ if 'total_count' not in st.session_state:
 if 'correct_count' not in st.session_state:
     st.session_state.correct_count = 0
 if 'feedback_history' not in st.session_state:
-    st.session_state.feedback_history = [] # 用來存介面顯示的紀錄
+    st.session_state.feedback_history = [] 
 
 # --- CSS 補強 ---
 st.markdown(
@@ -62,7 +62,6 @@ if st.session_state.total_count > 0:
     st.sidebar.write(f"總辨識次數: {st.session_state.total_count}")
     st.sidebar.metric("目前正確率", f"{acc:.2f}%")
     
-    # --- 新增：在介面顯示反饋紀錄清單 ---
     with st.sidebar.expander("📝 查看反饋紀錄詳情", expanded=True):
         for i, entry in enumerate(reversed(st.session_state.feedback_history)):
             color = "green" if entry['is_correct'] else "red"
@@ -72,6 +71,7 @@ if st.session_state.total_count > 0:
         st.session_state.total_count = 0
         st.session_state.correct_count = 0
         st.session_state.feedback_history = []
+        if 'current_pred' in st.session_state: del st.session_state['current_pred']
         st.rerun()
 else:
     st.sidebar.write("尚無統計資料")
@@ -104,7 +104,7 @@ def process_and_predict(img_gray, is_canvas=False):
     for cnt in valid_contours:
         x, y, w, h = cv2.boundingRect(cnt)
         roi = thresh[y:y+h, x:x+w]
-        pad = 30 # 解決 1 看成 6 的 Padding 優化
+        pad = 30 
         digit_canvas = cv2.copyMakeBorder(roi, pad, pad, pad, pad, cv2.BORDER_CONSTANT, value=0)
         final_img = cv2.resize(digit_canvas, (28, 28), interpolation=cv2.INTER_AREA)
         input_data = final_img.astype('float32') / 255.0
@@ -115,6 +115,29 @@ def process_and_predict(img_gray, is_canvas=False):
         roi_images.append(final_img)
     return results, confidences, roi_images
 
+# --- 共用功能：反饋 UI 區塊 ---
+def render_feedback_ui():
+    if 'current_pred' in st.session_state:
+        st.divider()
+        st.subheader("🚩 辨識回饋")
+        c1, c2 = st.columns([3, 1])
+        with c1:
+            correct_ans = st.text_input("如果有誤，請輸入正確答案：", value=st.session_state['current_pred'], key="feedback_input")
+        with c2:
+            st.write(" ") # 對齊
+            if st.button("提交回饋", key="feedback_btn"):
+                is_correct = (st.session_state['current_pred'] == correct_ans)
+                st.session_state.total_count += 1
+                if is_correct: st.session_state.correct_count += 1
+                
+                st.session_state.feedback_history.append({
+                    "pred": st.session_state['current_pred'],
+                    "actual": correct_ans,
+                    "is_correct": is_correct
+                })
+                del st.session_state['current_pred']
+                st.rerun()
+
 # 5. 模式切換邏輯
 if option == "手寫畫板模式":
     st.write("### ✍️ 請在黑色畫板內寫入數字：")
@@ -124,7 +147,7 @@ if option == "手寫畫板模式":
     )
     
     if canvas_result.image_data is not None:
-        if st.button("🚀 進行 AI 辨識"):
+        if st.button("🚀 進行 AI 辨識", key="btn_canvas"):
             img_raw = canvas_result.image_data.astype('uint8')
             img_gray = cv2.cvtColor(img_raw, cv2.COLOR_RGBA2GRAY)
             res, confs, imgs = process_and_predict(img_gray, is_canvas=True)
@@ -136,43 +159,28 @@ if option == "手寫畫板模式":
                 for i, im in enumerate(imgs):
                     with cols[i]:
                         st.image(im, caption=f"預測: {res[i]} ({confs[i]*100:.1f}%)")
-
-    # 反饋區
-    if 'current_pred' in st.session_state:
-        st.divider()
-        st.subheader("🚩 辨識回饋")
-        c1, c2 = st.columns([3, 1])
-        with c1:
-            correct_ans = st.text_input("如果有誤，請輸入正確答案：", value=st.session_state['current_pred'])
-        with c2:
-            st.write(" ") # 對齊
-            if st.button("提交回饋"):
-                is_correct = (st.session_state['current_pred'] == correct_ans)
-                st.session_state.total_count += 1
-                if is_correct: st.session_state.correct_count += 1
-                
-                # 存入紀錄清單以供介面顯示
-                st.session_state.feedback_history.append({
-                    "pred": st.session_state['current_pred'],
-                    "actual": correct_ans,
-                    "is_correct": is_correct
-                })
-                
-                del st.session_state['current_pred']
-                st.rerun()
+            else:
+                st.warning("請在畫板上書寫數字。")
+    render_feedback_ui()
 
 elif option == "使用相機拍照" or option == "上傳圖片檔":
     img_file = st.camera_input("📸 立即拍攝數字") if option == "使用相機拍照" else st.file_uploader("📁 上傳圖片檔案", type=["jpg", "png", "jpeg"])
+    
     if img_file:
         image = Image.open(img_file)
         img_array = np.array(image.convert('RGB'))
         img_gray = cv2.cvtColor(img_array, cv2.COLOR_RGB2GRAY)
-        res, confs, imgs = process_and_predict(img_gray)
-        if res:
-            final_str = ''.join(map(str, res))
-            st.session_state['current_pred'] = final_str
-            st.success(f"## 🔢 最終辨識結果： {final_str}")
-            cols = st.columns(min(len(imgs), 10))
-            for i, im in enumerate(imgs):
-                with cols[i]:
-                    st.image(im, caption=f"預測: {res[i]} ({confs[i]*100:.1f}%)")
+        
+        if st.button("🚀 開始辨識照片", key="btn_photo"):
+            res, confs, imgs = process_and_predict(img_gray)
+            if res:
+                final_str = ''.join(map(str, res))
+                st.session_state['current_pred'] = final_str
+                st.success(f"## 🔢 最終辨識結果： {final_str}")
+                cols = st.columns(min(len(imgs), 10))
+                for i, im in enumerate(imgs):
+                    with cols[i]:
+                        st.image(im, caption=f"預測: {res[i]} ({confs[i]*100:.1f}%)")
+            else:
+                st.warning("偵測不到數字，請試著調整側面板參數。")
+    render_feedback_ui()
