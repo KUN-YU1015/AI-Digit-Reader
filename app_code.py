@@ -5,7 +5,7 @@ import numpy as np
 from PIL import Image
 from streamlit_drawable_canvas import st_canvas
 
-# 1. 頁面設定 (保持你原本的 layout="wide")
+# 1. 頁面設定 (保持原本的 layout="wide")
 st.set_page_config(page_title="AI手寫辨識APP", layout="wide")
 
 # --- [精確插入] 針對行動端 APP 的 CSS 補強，解決下拉刷新問題 ---
@@ -27,13 +27,14 @@ st.markdown(
     unsafe_allow_html=True
 )
 
-# --- 保持你原本的標題與三點提示內容 ---
+# --- 修改後的標題與四點提示內容 ---
 st.title("🔢 AI手寫辨識APP")
 st.markdown("""
 ##### 💡 **使用說明：**
 1. **多元輸入模式**：支援畫板手寫、拍照、圖片檔案上傳。
 2. **最佳辨識建議**：建議使用較粗的筆書寫（如馬克筆），並在光源充足的情況下拍攝，以提高辨識成功率。
 3. **性能優化手腕**：若辨識不佳，可使用側面板微調參數提高辨識成功率。
+4. **手寫注意事項**：手寫部分勿太靠近邊框，以免辨識錯誤。
 """)
 st.divider()
 
@@ -96,20 +97,20 @@ def process_and_predict(img_gray, is_canvas=False):
         
     return results, roi_images
 
-# 5. 模式切換邏輯 (保持原本介面)
+# 5. 模式切換邏輯 (畫板範圍已加大)
 if option == "手寫畫板模式":
     st.write("### ✍️ 請在黑色畫板內寫入數字：")
     
-    # [精確插入] 在畫板上方加入一個小空白，讓手指不要太靠近頂端
+    # 在畫板上方加入一個小空白，讓手指不要太靠近頂端
     st.write("") 
     
     canvas_result = st_canvas(
         fill_color="rgba(255, 255, 255, 0.3)",
-        stroke_width=15, # 保持原本寬度
+        stroke_width=15, 
         stroke_color="#FFFFFF",
         background_color="#000000",
-        width=700,
-        height=300,
+        width=700, # 寬度維持 700
+        height=500, # 高度由 300 調整為 500
         drawing_mode="freedraw",
         key="canvas",
     )
