@@ -8,15 +8,25 @@ from streamlit_drawable_canvas import st_canvas
 # 1. 頁面設定
 st.set_page_config(page_title="AI手寫辨識APP", layout="wide")
 
-if 'total_count' not in st.session_state: st.session_state.total_count = 0
-if 'correct_count' not in st.session_state: st.session_state.correct_count = 0
+# 初始化統計數據
+if 'total_count' not in st.session_state:
+    st.session_state.total_count = 0
+if 'correct_count' not in st.session_state:
+    st.session_state.correct_count = 0
 
-st.markdown("""
+# --- CSS 補強 (防止行動端下拉刷新) ---
+st.markdown(
+    """
     <style>
-    html, body, [data-testid="stAppViewContainer"] { overscroll-behavior-y: contain !important; overflow: hidden !important; }
+    html, body, [data-testid="stAppViewContainer"] {
+        overscroll-behavior-y: contain !important;
+        overflow: hidden !important;
+    }
     canvas { touch-action: none !important; }
     </style>
-    """, unsafe_allow_html=True)
+    """,
+    unsafe_allow_html=True
+)
 
 st.title("🔢 AI手寫辨識APP")
 st.markdown("""
@@ -28,6 +38,7 @@ st.markdown("""
 """)
 st.divider()
 
+# 2. 載入模型
 @st.cache_resource
 def load_my_model():
     return tf.keras.models.load_model('mnist_model.h5')
@@ -35,13 +46,14 @@ def load_my_model():
 try:
     model = load_my_model()
     st.sidebar.success("✅ AI 模型已就緒")
-except:
-    st.sidebar.error("❌ 模型載入失敗")
+except Exception as e:
+    st.sidebar.error(f"❌ 模型載入失敗: {e}")
 
+# 3. 側邊欄
 st.sidebar.header("🛠️ 系統功能設定")
 option = st.sidebar.radio("📸 選擇輸入來源：", ("手寫畫板模式", "使用相機拍照", "上傳圖片檔"))
 
-# 側邊欄統計
+# 歷史統計顯示
 st.sidebar.divider()
 st.sidebar.subheader("📊 歷史辨識統計")
 if st.session_state.total_count > 0:
@@ -55,27 +67,38 @@ if st.session_state.total_count > 0:
 else:
     st.sidebar.write("尚無統計資料")
 
-# 4. 影像處理函數 (優化 Padding 以解決辨識錯誤)
+st.sidebar.divider()
+st.sidebar.write("🔍 辨識參數微調 (拍照/上傳專用)")
+min_area = st.sidebar.slider("1. 雜訊過濾強度", 100, 1500, 300)
+sensitivity = st.sidebar.slider("2. 捕捉靈敏度", 1, 25, 12)
+thickness = st.sidebar.slider("3. 字體加粗程度", 1, 5, 2)
+
+# 4. 影像處理函數 (強化 Padding 以解決辨識錯誤)
 def process_and_predict(img_gray, is_canvas=False):
     if is_canvas:
         _, thresh = cv2.threshold(img_gray, 1, 255, cv2.THRESH_BINARY)
     else:
-        blurred = cv2.GaussianBlur(img_gray, (5, 5), 0)
-        thresh = cv2.adaptiveThreshold(blurred, 255, cv2.ADAPTIVE_THRESH_GAUSSIAN_C, cv2.THRESH_BINARY_INV, 11, 12)
+        enhanced = cv2.convertScaleAbs(img_gray, alpha=1.5, beta=0)
+        blurred = cv2.GaussianBlur(enhanced, (5, 5), 0)
+        thresh = cv2.adaptiveThreshold(blurred, 255, cv2.ADAPTIVE_THRESH_GAUSSIAN_C, 
+                                       cv2.THRESH_BINARY_INV, 11, sensitivity)
+        kernel = np.ones((3,3), np.uint8)
+        thresh = cv2.dilate(thresh, kernel, iterations=thickness)
 
     contours, _ = cv2.findContours(thresh, cv2.RETR_EXTERNAL, cv2.CHAIN_APPROX_SIMPLE)
-    valid_contours = sorted([c for c in contours if cv2.contourArea(c) > 300], key=lambda c: cv2.boundingRect(c)[0])
+    valid_contours = sorted([c for c in contours if cv2.contourArea(c) > min_area], 
+                            key=lambda c: cv2.boundingRect(c)[0])
     
-    if not valid_contours: return None, None, None
+    if not valid_contours:
+        return None, None, None
 
     results, confidences, roi_images = [], [], []
     for cnt in valid_contours:
         x, y, w, h = cv2.boundingRect(cnt)
         roi = thresh[y:y+h, x:x+w]
         
-        # --- 核心改進：加大 Padding 解決 1 看成 6 ---
-        # 先建立帶有較大邊框的基底 (30px padding)
-        pad = 30 
+        # 核心優化：給予 30px 的黑邊緩衝，讓數字在 28x28 中不變形
+        pad = 30
         digit_canvas = cv2.copyMakeBorder(roi, pad, pad, pad, pad, cv2.BORDER_CONSTANT, value=0)
         final_img = cv2.resize(digit_canvas, (28, 28), interpolation=cv2.INTER_AREA)
         
@@ -86,21 +109,22 @@ def process_and_predict(img_gray, is_canvas=False):
         results.append(np.argmax(prediction))
         confidences.append(np.max(prediction))
         roi_images.append(final_img)
+        
     return results, confidences, roi_images
 
-# 5. 模式切換
+# 5. 模式切換邏輯
 if option == "手寫畫板模式":
     st.write("### ✍️ 請在黑色畫板內寫入數字：")
     tool_col, _ = st.columns([2, 2])
     with tool_col:
         drawing_mode = st.radio("🖌️ 工具選擇：", ("畫筆模式", "橡皮擦模式"), horizontal=True)
     
-    # 解決 Component Error 的關鍵：動態 key
-    canvas_key = f"canvas_{drawing_mode}" 
+    # 使用動態 Key 修復 Component Error
+    canvas_key = f"canvas_{drawing_mode}"
     
     canvas_result = st_canvas(
         fill_color="rgba(255, 255, 255, 0.3)",
-        stroke_width=15 if drawing_mode == "畫筆模式" else 40, # 橡皮擦加粗
+        stroke_width=15 if drawing_mode == "畫筆模式" else 40,
         stroke_color="#FFFFFF",
         background_color="#000000",
         width=700, height=500,
@@ -124,10 +148,32 @@ if option == "手寫畫板模式":
                 with st.form("feedback"):
                     st.write("🚩 辨識回饋與統計")
                     user_val = st.text_input("正確數值：", value=final_str)
-                    if st.form_submit_button("提交"):
+                    if st.form_submit_button("提交回饋"):
                         st.session_state.total_count += 1
-                        if user_val == final_str: st.session_state.correct_count += 1
+                        if user_val == final_str:
+                            st.session_state.correct_count += 1
                         st.rerun()
             else:
-                st.warning("請書寫數字。")
-# ...其餘拍照模式維持原狀...
+                st.warning("請在畫板上書寫數字。")
+
+elif option == "使用相機拍照" or option == "上傳圖片檔":
+    img_file = st.camera_input("📸 立即拍攝數字") if option == "使用相機拍照" else st.file_uploader("📁 上傳圖片檔案", type=["jpg", "png", "jpeg"])
+    
+    if img_file:
+        image = Image.open(img_file)
+        img_array = np.array(image.convert('RGB'))
+        img_gray = cv2.cvtColor(img_array, cv2.COLOR_RGB2GRAY)
+        
+        st.write("### 🖼️ 處理細節：")
+        st.image(image, width=400)
+        
+        res, confs, imgs = process_and_predict(img_gray)
+        if res:
+            st.divider()
+            st.success(f"## 🔢 最終辨識結果： {''.join(map(str, res))}")
+            cols = st.columns(min(len(imgs), 10))
+            for i, im in enumerate(imgs):
+                with cols[i]:
+                    st.image(im, caption=f"預測: {res[i]} ({confs[i]*100:.1f}%)")
+        else:
+            st.warning("偵測不到數字，請試著調整側面板參數。")
