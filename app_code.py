@@ -8,7 +8,7 @@ from streamlit_drawable_canvas import st_canvas
 # 1. 頁面設定
 st.set_page_config(page_title="AI手寫辨識APP", layout="wide")
 
-# 初始化統計數據
+# 初始化統計數據 (Session State)
 if 'total_count' not in st.session_state:
     st.session_state.total_count = 0
 if 'correct_count' not in st.session_state:
@@ -47,7 +47,7 @@ try:
     model = load_my_model()
     st.sidebar.success("✅ AI 模型已就緒")
 except Exception as e:
-    st.sidebar.error(f"❌ 模型載入失敗: {e}")
+    st.sidebar.error(f"❌ 模型載入失敗")
 
 # 3. 側邊欄
 st.sidebar.header("🛠️ 系統功能設定")
@@ -59,6 +59,7 @@ st.sidebar.subheader("📊 歷史辨識統計")
 if st.session_state.total_count > 0:
     acc = (st.session_state.correct_count / st.session_state.total_count) * 100
     st.sidebar.write(f"總辨識次數: {st.session_state.total_count}")
+    st.sidebar.write(f"正確次數: {st.session_state.correct_count}")
     st.sidebar.metric("歷史正確率", f"{acc:.2f}%")
     if st.sidebar.button("🗑️ 刪除統計紀錄"):
         st.session_state.total_count = 0
@@ -73,7 +74,7 @@ min_area = st.sidebar.slider("1. 雜訊過濾強度", 100, 1500, 300)
 sensitivity = st.sidebar.slider("2. 捕捉靈敏度", 1, 25, 12)
 thickness = st.sidebar.slider("3. 字體加粗程度", 1, 5, 2)
 
-# 4. 影像處理函數 (強化 Padding 以解決辨識錯誤)
+# 4. 影像處理函數 (包含 Padding 優化)
 def process_and_predict(img_gray, is_canvas=False):
     if is_canvas:
         _, thresh = cv2.threshold(img_gray, 1, 255, cv2.THRESH_BINARY)
@@ -97,7 +98,7 @@ def process_and_predict(img_gray, is_canvas=False):
         x, y, w, h = cv2.boundingRect(cnt)
         roi = thresh[y:y+h, x:x+w]
         
-        # 核心優化：給予 30px 的黑邊緩衝，讓數字在 28x28 中不變形
+        # 加大 Padding 確保 1 不會變形
         pad = 30
         digit_canvas = cv2.copyMakeBorder(roi, pad, pad, pad, pad, cv2.BORDER_CONSTANT, value=0)
         final_img = cv2.resize(digit_canvas, (28, 28), interpolation=cv2.INTER_AREA)
@@ -115,21 +116,16 @@ def process_and_predict(img_gray, is_canvas=False):
 # 5. 模式切換邏輯
 if option == "手寫畫板模式":
     st.write("### ✍️ 請在黑色畫板內寫入數字：")
-    tool_col, _ = st.columns([2, 2])
-    with tool_col:
-        drawing_mode = st.radio("🖌️ 工具選擇：", ("畫筆模式", "橡皮擦模式"), horizontal=True)
     
-    # 使用動態 Key 修復 Component Error
-    canvas_key = f"canvas_{drawing_mode}"
-    
+    # 移除橡皮擦切換，回歸單一穩定畫板
     canvas_result = st_canvas(
         fill_color="rgba(255, 255, 255, 0.3)",
-        stroke_width=15 if drawing_mode == "畫筆模式" else 40,
+        stroke_width=15,
         stroke_color="#FFFFFF",
         background_color="#000000",
         width=700, height=500,
-        drawing_mode="freedraw" if drawing_mode == "畫筆模式" else "eraser",
-        key=canvas_key,
+        drawing_mode="freedraw",
+        key="canvas_fixed",
     )
     
     if canvas_result.image_data is not None:
@@ -139,22 +135,34 @@ if option == "手寫畫板模式":
             res, confs, imgs = process_and_predict(img_gray, is_canvas=True)
             if res:
                 final_str = ''.join(map(str, res))
+                st.session_state['last_res'] = final_str # 暫存結果給回饋區用
                 st.success(f"## 最終辨識結果： {final_str}")
+                
                 cols = st.columns(len(imgs))
                 for i, im in enumerate(imgs):
                     with cols[i]:
                         st.image(im, caption=f"預測: {res[i]} ({confs[i]*100:.1f}%)")
-                
-                with st.form("feedback"):
-                    st.write("🚩 辨識回饋與統計")
-                    user_val = st.text_input("正確數值：", value=final_str)
-                    if st.form_submit_button("提交回饋"):
-                        st.session_state.total_count += 1
-                        if user_val == final_str:
-                            st.session_state.correct_count += 1
-                        st.rerun()
             else:
                 st.warning("請在畫板上書寫數字。")
+
+    # --- 修正後的報錯回饋區 (放在辨識按鈕外，確保反應靈敏) ---
+    if 'last_res' in st.session_state:
+        st.divider()
+        st.subheader("🚩 辨識回饋與統計")
+        col_input, col_btn = st.columns([3, 1])
+        with col_input:
+            user_val = st.text_input("如果辨識錯誤，請在此輸入正確數值：", value=st.session_state['last_res'])
+        with col_btn:
+            st.write(" ") # 對齊用
+            if st.button("提交回饋紀錄"):
+                st.session_state.total_count += 1
+                if user_val == st.session_state['last_res']:
+                    st.session_state.correct_count += 1
+                    st.success("紀錄成功！")
+                else:
+                    st.warning("已紀錄錯誤。")
+                del st.session_state['last_res'] # 清除暫存強制重整
+                st.rerun()
 
 elif option == "使用相機拍照" or option == "上傳圖片檔":
     img_file = st.camera_input("📸 立即拍攝數字") if option == "使用相機拍照" else st.file_uploader("📁 上傳圖片檔案", type=["jpg", "png", "jpeg"])
